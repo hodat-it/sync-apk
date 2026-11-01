@@ -1,6 +1,7 @@
 package com.a54.sync;
 
 import android.accessibilityservice.AccessibilityService;
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -15,7 +16,6 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.accessibility.AccessibilityEvent;
-import androidx.core.app.NotificationCompat;
 
 public class MonitorAccessibilityService extends AccessibilityService {
 
@@ -153,16 +153,26 @@ public class MonitorAccessibilityService extends AccessibilityService {
         dismissIntent.putExtra("msg", message);
         PendingIntent dismissPending = PendingIntent.getBroadcast(this, notifId + 1, dismissIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, channelId)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder = new Notification.Builder(this, channelId);
+        } else {
+            builder = new Notification.Builder(this);
+        }
+
+        builder.setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("Thông báo từ Hệ thống")
                 .setContentText(message)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setContentIntent(clickPending)
                 .setDeleteIntent(dismissPending);
 
-        nm.notify(notifId, builder.build());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+            builder.setPriority(Notification.PRIORITY_HIGH);
+            nm.notify(notifId, builder.build());
+        } else {
+            nm.notify(notifId, builder.getNotification());
+        }
     }
 
     private String getReadableAppName(String pkg) {
