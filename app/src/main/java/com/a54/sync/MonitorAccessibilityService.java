@@ -1,7 +1,6 @@
 package com.a54.sync;
 
 import android.accessibilityservice.AccessibilityService;
-import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -16,144 +15,172 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.accessibility.AccessibilityEvent;
-import org.json.JSONObject;
+import androidx.core.app.NotificationCompat;
 
 public class MonitorAccessibilityService extends AccessibilityService {
-    private boolean waitingForFirstAppAfterUnlock = false;
+
+    private boolean isScreenUnlocked = true;
     private String currentForegroundApp = "Màn hình chính";
+    private String lastActiveApp = "";
+
+    private BroadcastReceiver screenReceiver;
     private Handler handler = new Handler(Looper.getMainLooper());
-    private static final long INTERVAL_90_MINUTES = 90 * 60 * 1000L; // 90 phút
-
-    private final BroadcastReceiver unlockReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
-                waitingForFirstAppAfterUnlock = true;
-            }
-        }
-    };
-
-    // Bộ đếm chạy ngầm 90 phút 1 lần
-    private final Runnable runnable90Min = new Runnable() {
-        @Override
-        public void run() {
-            SharedPreferences prefs = getSharedPreferences("A54Prefs", MODE_PRIVATE);
-            if (prefs.getBoolean("f2_interval", false)) {
-                ApiClient.postEvent("interval_90m", "app_name", currentForegroundApp);
-            }
-            handler.postDelayed(this, INTERVAL_90_MINUTES);
-        }
-    };
-
-    // Kiểm tra lệnh bắn Notification và đồng bộ trạng thái công tắc mỗi 10 giây
-    private final Runnable syncRunnable = new Runnable() {
-        @Override
-        public void run() {
-            ApiClient.fetchPhoneState(response -> {
-                try {
-                    JSONObject cfg = response.getJSONObject("config");
-                    SharedPreferences prefs = getSharedPreferences("A54Prefs", MODE_PRIVATE);
-                    prefs.edit()
-                        .putBoolean("f1_unlock", cfg.getBoolean("f1_unlock"))
-                        .putBoolean("f2_interval", cfg.getBoolean("f2_interval"))
-                        .putBoolean("f3_notif", cfg.getBoolean("f3_notif"))
-                        .apply();
-
-                    String notifMsg = response.optString("notif", "");
-                    if (!notifMsg.isEmpty() && cfg.getBoolean("f3_notif")) {
-                        showInteractiveNotification(notifMsg);
-                    }
-                } catch (Exception ignored) {}
-            });
-            handler.postDelayed(this, 10000);
-        }
-    };
+    private Runnable syncRunnable;
+    private long lastIntervalReportTime = 0;
+    private static final long INTERVAL_90_MIN = 90 * 60 * 1000L; // 90 phút
 
     @Override
-    protected void onServiceConnected() {
+    public void onServiceConnected() {
         super.onServiceConnected();
-        registerReceiver(unlockReceiver, new IntentFilter(Intent.ACTION_USER_PRESENT));
-        handler.postDelayed(runnable90Min, INTERVAL_90_MINUTES);
+        lastIntervalReportTime = System.currentTimeMillis();
+
+        // 1. Lắng nghe sự kiện Mở khóa và Khóa/Tắt màn hình cho Công tắc 1
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_USER_PRESENT);
+        filter.addAction(Intent.ACTION_SCREEN_OFF);
+
+        screenReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String action = intent.getAction();
+                SharedPreferences prefs = getSharedPreferences("A54Prefs", MODE_PRIVATE);
+
+                if (Intent.ACTION_USER_PRESENT.equals(action)) {
+                    isScreenUnlocked = true;
+                    lastActiveApp = "";
+                    if (prefs.getBoolean("f1_unlock", false)) {
+                        ApiClient.postEvent("session_state", "status", "Mở khóa màn hình (Bắt đầu phiên)");
+                    }
+                } else if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                    if (isScreenUnlocked && prefs.getBoolean("f1_unlock", false)) {
+                        if (!lastActiveApp.isEmpty()) {
+                            ApiClient.postEvent("app_transition", "status", "Thoát ứng dụng: " + lastActiveApp);
+                        }
+                        ApiClient.postEvent("session_state", "status", "Khóa màn hình (Kết thúc phiên)");
+                    }
+                    isScreenUnlocked = false;
+                    lastActiveApp = "";
+                }
+            }
+        };
+        registerReceiver(screenReceiver, filter);
+
+        // 2. Vòng lặp 10 giây: Đồng bộ 3 công tắc + Báo cáo 90 phút + Bắn Notification
+        syncRunnable = new Runnable() {
+            @Override
+            public void run() {
+                ApiClient.syncWithServer(MonitorAccessibilityService.this, new ApiClient.SyncCallback() {
+                    @Override
+                    public void onSyncResult(boolean f1, boolean f2, boolean f3, String pendingNotif) {
+                        SharedPreferences prefs = getSharedPreferences("A54Prefs", MODE_PRIVATE);
+                        prefs.edit()
+                                .putBoolean("f1_unlock", f1)
+                                .putBoolean("f2_interval", f2)
+                                .putBoolean("f3_notif", f3)
+                                .apply();
+
+                        // Công tắc 2: Báo cáo định kỳ 90 phút
+                        long now = System.currentTimeMillis();
+                        if (f2 && (now - lastIntervalReportTime >= INTERVAL_90_MIN)) {
+                            lastIntervalReportTime = now;
+                            ApiClient.postEvent("interval_90m", "app_name", currentForegroundApp);
+                        }
+
+                        // Công tắc 3: Bắn Notification sang điện thoại
+                        if (f3 && pendingNotif != null && !pendingNotif.isEmpty()) {
+                            showCustomNotification(pendingNotif);
+                        }
+                    }
+                });
+                handler.postDelayed(this, 10000);
+            }
+        };
         handler.post(syncRunnable);
     }
 
-@Override
+    @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.getPackageName() != null) {
             String pkg = event.getPackageName().toString();
-            
-            // Lọc sạch toàn bộ màn hình chính (Samsung, Redmi), thanh trạng thái, bàn phím và chính app điều khiển
-            if (pkg.contains("systemui") || 
-                pkg.contains("launcher") || 
-                pkg.contains("miui.home") || 
-                pkg.contains("miui.screenrecorder") || 
-                pkg.contains("inputmethod") || 
-                pkg.equals("com.a54.sync")) {
+
+            // Bỏ qua thanh trạng thái, bàn phím và chính app điều khiển
+            if (pkg.contains("systemui") ||
+                pkg.contains("inputmethod") ||
+                pkg.equals("com.a54.sync") ||
+                pkg.contains("miui.screenrecorder")) {
                 return;
             }
-            
-            currentForegroundApp = getReadableAppName(pkg);
 
-            if (waitingForFirstAppAfterUnlock) {
-                waitingForFirstAppAfterUnlock = false;
-                SharedPreferences prefs = getSharedPreferences("A54Prefs", MODE_PRIVATE);
-                if (prefs.getBoolean("f1_unlock", false)) {
-                    ApiClient.postEvent("unlock_app", "app_name", currentForegroundApp);
+            SharedPreferences prefs = getSharedPreferences("A54Prefs", MODE_PRIVATE);
+
+            // Khi thoát ra Màn hình chính (Samsung Launcher / Redmi MIUI Home)
+            if (pkg.contains("launcher") || pkg.contains("miui.home")) {
+                currentForegroundApp = "Màn hình chính (" + pkg + ")";
+                if (isScreenUnlocked && prefs.getBoolean("f1_unlock", false) && !lastActiveApp.isEmpty()) {
+                    ApiClient.postEvent("app_transition", "status", "Thoát ứng dụng: " + lastActiveApp + " -> Về Màn hình chính");
+                    lastActiveApp = "";
+                }
+                return;
+            }
+
+            // Khi mở hoặc chuyển sang một ứng dụng khác (YouTube, Zalo, Chrome...)
+            String appName = getReadableAppName(pkg);
+            currentForegroundApp = appName;
+
+            if (isScreenUnlocked && prefs.getBoolean("f1_unlock", false)) {
+                if (!appName.equals(lastActiveApp)) {
+                    if (!lastActiveApp.isEmpty()) {
+                        ApiClient.postEvent("app_transition", "status", "Thoát: " + lastActiveApp + " -> Chuyển sang: " + appName);
+                    } else {
+                        ApiClient.postEvent("app_transition", "status", "Mở ứng dụng: " + appName);
+                    }
+                    lastActiveApp = appName;
                 }
             }
         }
     }
 
-    private String getReadableAppName(String pkg) {
-        try {
-            PackageManager pm = getPackageManager();
-            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return pm.getApplicationLabel(ai).toString() + " (" + pkg + ")";
-        } catch (Exception e) {
-            return pkg;
-        }
-    }
-
-    private void showInteractiveNotification(String message) {
+    private void showCustomNotification(String message) {
         String channelId = "a54_sync_channel";
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(channelId, "A54 PC Notifications", NotificationManager.IMPORTANCE_HIGH);
+            NotificationChannel channel = new NotificationChannel(channelId, "A54 Sync Notif", NotificationManager.IMPORTANCE_HIGH);
             nm.createNotificationChannel(channel);
         }
 
         int notifId = (int) (System.currentTimeMillis() % 10000);
 
         Intent clickIntent = new Intent(this, NotifActionReceiver.class);
-        clickIntent.setAction("ACTION_CLICK_" + notifId);
-        clickIntent.putExtra("action_type", "CLICKED");
-        clickIntent.putExtra("notif_body", message);
-        clickIntent.putExtra("notif_id", notifId);
-        PendingIntent clickPending = PendingIntent.getBroadcast(
-            this, notifId, clickIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
+        clickIntent.setAction("ACTION_NOTIF_CLICKED");
+        clickIntent.putExtra("msg", message);
+        PendingIntent clickPending = PendingIntent.getBroadcast(this, notifId, clickIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Intent deleteIntent = new Intent(this, NotifActionReceiver.class);
-        deleteIntent.setAction("ACTION_DELETE_" + notifId);
-        deleteIntent.putExtra("action_type", "DISMISSED");
-        deleteIntent.putExtra("notif_body", message);
-        deleteIntent.putExtra("notif_id", notifId);
-        PendingIntent deletePending = PendingIntent.getBroadcast(
-            this, notifId + 1, deleteIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
+        Intent dismissIntent = new Intent(this, NotifActionReceiver.class);
+        dismissIntent.setAction("ACTION_NOTIF_DISMISSED");
+        dismissIntent.putExtra("msg", message);
+        PendingIntent dismissPending = PendingIntent.getBroadcast(this, notifId + 1, dismissIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-            ? new Notification.Builder(this, channelId)
-            : new Notification.Builder(this);
-
-        builder.setSmallIcon(android.R.drawable.ic_dialog_info)
-               .setContentTitle("Thông báo từ Máy tính")
-               .setContentText(message)
-               .setContentIntent(clickPending)  // Bắt sự kiện CLICK
-               .setDeleteIntent(deletePending)  // Bắt sự kiện GẠT XÓA
-               .setAutoCancel(true);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, channelId)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("Thông báo từ Hệ thống")
+                .setContentText(message)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(clickPending)
+                .setDeleteIntent(dismissPending);
 
         nm.notify(notifId, builder.build());
+    }
+
+    private String getReadableAppName(String pkg) {
+        PackageManager pm = getPackageManager();
+        try {
+            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+            CharSequence label = pm.getApplicationLabel(ai);
+            return label != null ? label.toString() + " (" + pkg + ")" : pkg;
+        } catch (Exception e) {
+            return pkg;
+        }
     }
 
     @Override
@@ -162,8 +189,13 @@ public class MonitorAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        unregisterReceiver(unlockReceiver);
-        handler.removeCallbacks(runnable90Min);
-        handler.removeCallbacks(syncRunnable);
+        if (screenReceiver != null) {
+            try {
+                unregisterReceiver(screenReceiver);
+            } catch (Exception ignored) {}
+        }
+        if (handler != null && syncRunnable != null) {
+            handler.removeCallbacks(syncRunnable);
+        }
     }
 }
