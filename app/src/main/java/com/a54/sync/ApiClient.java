@@ -1,22 +1,26 @@
 package com.a54.sync;
 
+import android.content.Context;
 import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class ApiClient {
-    // THAY LINK GOOGLE APPS SCRIPT CỦA BẠN VÀO ĐÂY:
-    public static final String GAS_URL = "https://script.google.com/macros/s/AKfycbyEOucHLuhEvxaKhNu9NXlWHF3UmOocWAKt8kCAXO5LQRG8jM8cbxzyQGQ2Xg86s9V_7Q/exec";
+    // Thay đường link Google Apps Script của bạn vào đây:
+    private static final String GAS_URL = "YOUR_GAS_WEB_APP_URL";
+    private static final ExecutorService executor = Executors.newCachedThreadPool();
 
-    public interface Callback {
-        void onResult(JSONObject response);
+    public interface SyncCallback {
+        void onSyncResult(boolean f1, boolean f2, boolean f3, String pendingNotif);
     }
 
-    public static void postEvent(String action, String keyOrField, Object value) {
-        new Thread(() -> {
+    public static void postEvent(String eventType, String key, String value) {
+        executor.execute(() -> {
             try {
                 URL url = new URL(GAS_URL);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -25,44 +29,46 @@ public class ApiClient {
                 conn.setDoOutput(true);
 
                 JSONObject json = new JSONObject();
-                json.put("action", action);
-                if ("update_config".equals(action)) {
-                    json.put("key", keyOrField);
-                    json.put("value", value);
-                } else if ("notif_feedback".equals(action)) {
-                    json.put("detail", value);
-                } else {
-                    json.put("app_name", value);
-                }
+                json.put("action", "log_event");
+                json.put("event_type", eventType);
+                json.put(key, value);
 
                 try (OutputStream os = conn.getOutputStream()) {
                     byte[] input = json.toString().getBytes("utf-8");
                     os.write(input, 0, input.length);
                 }
                 conn.getResponseCode();
+                conn.disconnect();
             } catch (Exception ignored) {}
-        }).start();
+        });
     }
 
-    public static void fetchPhoneState(Callback callback) {
-        new Thread(() -> {
+    public static void syncWithServer(Context context, SyncCallback callback) {
+        executor.execute(() -> {
             try {
                 URL url = new URL(GAS_URL + "?role=phone&t=" + System.currentTimeMillis());
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("GET");
-                conn.setInstanceFollowRedirects(true);
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
 
                 BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                StringBuilder content = new StringBuilder();
+                StringBuilder response = new StringBuilder();
                 String line;
                 while ((line = in.readLine()) != null) {
-                    content.append(line);
+                    response.append(line);
                 }
                 in.close();
-                if (callback != null) {
-                    callback.onResult(new JSONObject(content.toString()));
-                }
+
+                JSONObject data = new JSONObject(response.toString());
+                JSONObject cfg = data.getJSONObject("config");
+                boolean f1 = cfg.optBoolean("f1_unlock", false);
+                boolean f2 = cfg.optBoolean("f2_interval", false);
+                boolean f3 = cfg.optBoolean("f3_notif", false);
+                String pendingNotif = data.optString("pending_notif", "");
+
+                callback.onSyncResult(f1, f2, f3, pendingNotif);
             } catch (Exception ignored) {}
-        }).start();
+        });
     }
 }
