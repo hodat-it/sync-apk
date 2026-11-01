@@ -12,7 +12,7 @@ import java.util.concurrent.Executors;
 
 public class ApiClient {
     // Thay đường link Google Apps Script của bạn vào đây:
-    private static final String GAS_URL = "YOUR_GAS_WEB_APP_URL";
+    private static final String GAS_URL = "https://script.google.com/macros/s/AKfycbyEOucHLuhEvxaKhNu9NXlWHF3UmOocWAKt8kCAXO5LQRG8jM8cbxzyQGQ2Xg86s9V_7Q/exec";
     private static final ExecutorService executor = Executors.newCachedThreadPool();
 
     public interface SyncCallback {
