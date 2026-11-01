@@ -79,25 +79,28 @@ public class MainActivity extends Activity {
 
     private void loadServerState() {
         ApiClient.fetchPhoneState(response -> runOnUiThread(() -> {
-            if (response != null) {
+            if (response != null && !response.isEmpty()) {
                 try {
+                    // Chuyển chuỗi String response thành JSONObject hợp lệ trước khi lấy config
                     JSONObject data = new JSONObject(response);
-                    JSONObject cfg = data.getJSONObject("config");
-                    boolean f1 = cfg.optBoolean("f1_unlock", false);
-                    boolean f2 = cfg.optBoolean("f2_interval", false);
-                    boolean f3 = cfg.optBoolean("f3_notif", false);
+                    if (data.has("config")) {
+                        JSONObject cfg = data.getJSONObject("config");
+                        boolean f1 = cfg.optBoolean("f1_unlock", false);
+                        boolean f2 = cfg.optBoolean("f2_interval", false);
+                        boolean f3 = cfg.optBoolean("f3_notif", false);
 
-                    swF1.setChecked(f1);
-                    swF2.setChecked(f2);
-                    swF3.setChecked(f3);
+                        swF1.setChecked(f1);
+                        swF2.setChecked(f2);
+                        swF3.setChecked(f3);
 
-                    getSharedPreferences("A54Prefs", MODE_PRIVATE).edit()
-                            .putBoolean("f1_unlock", f1)
-                            .putBoolean("f2_interval", f2)
-                            .putBoolean("f3_notif", f3)
-                            .apply();
+                        getSharedPreferences("A54Prefs", MODE_PRIVATE).edit()
+                                .putBoolean("f1_unlock", f1)
+                                .putBoolean("f2_interval", f2)
+                                .putBoolean("f3_notif", f3)
+                                .apply();
 
-                    tvStatus.setText("Trạng thái: Đã kết nối với Web");
+                        tvStatus.setText("Trạng thái: Đã kết nối với Web");
+                    }
                 } catch (Exception e) {
                     tvStatus.setText("Trạng thái: Dữ liệu lỗi");
                 }
