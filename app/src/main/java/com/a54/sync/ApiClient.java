@@ -19,6 +19,10 @@ public class ApiClient {
         void onSyncResult(boolean f1, boolean f2, boolean f3, String pendingNotif);
     }
 
+    public interface StateCallback {
+        void onResult(String response);
+    }
+
     public static void postEvent(String eventType, String key, String value) {
         executor.execute(() -> {
             try {
@@ -40,6 +44,38 @@ public class ApiClient {
                 conn.getResponseCode();
                 conn.disconnect();
             } catch (Exception ignored) {}
+        });
+    }
+
+    public static void postEvent(String eventType, String key, boolean value) {
+        postEvent(eventType, key, String.valueOf(value));
+    }
+
+    public static void fetchPhoneState(StateCallback callback) {
+        executor.execute(() -> {
+            try {
+                URL url = new URL(GAS_URL + "?role=phone&t=" + System.currentTimeMillis());
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+
+                BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = in.readLine()) != null) {
+                    response.append(line);
+                }
+                in.close();
+
+                if (callback != null) {
+                    callback.onResult(response.toString());
+                }
+            } catch (Exception e) {
+                if (callback != null) {
+                    callback.onResult(null);
+                }
+            }
         });
     }
 
@@ -67,7 +103,9 @@ public class ApiClient {
                 boolean f3 = cfg.optBoolean("f3_notif", false);
                 String pendingNotif = data.optString("pending_notif", "");
 
-                callback.onSyncResult(f1, f2, f3, pendingNotif);
+                if (callback != null) {
+                    callback.onSyncResult(f1, f2, f3, pendingNotif);
+                }
             } catch (Exception ignored) {}
         });
     }
