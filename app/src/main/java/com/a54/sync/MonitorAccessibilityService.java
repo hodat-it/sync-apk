@@ -27,14 +27,13 @@ public class MonitorAccessibilityService extends AccessibilityService {
     private Handler handler = new Handler(Looper.getMainLooper());
     private Runnable syncRunnable;
     private long lastIntervalReportTime = 0;
-    private static final long INTERVAL_90_MIN = 90 * 60 * 1000L; // 90 phút
+    private static final long INTERVAL_90_MIN = 90 * 60 * 1000L;
 
     @Override
     public void onServiceConnected() {
         super.onServiceConnected();
         lastIntervalReportTime = System.currentTimeMillis();
 
-        // 1. Lắng nghe sự kiện Mở khóa và Khóa/Tắt màn hình cho Công tắc 1
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_USER_PRESENT);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -65,7 +64,6 @@ public class MonitorAccessibilityService extends AccessibilityService {
         };
         registerReceiver(screenReceiver, filter);
 
-        // 2. Vòng lặp 10 giây: Đồng bộ 3 công tắc + Báo cáo 90 phút + Bắn Notification
         syncRunnable = new Runnable() {
             @Override
             public void run() {
@@ -79,14 +77,12 @@ public class MonitorAccessibilityService extends AccessibilityService {
                                 .putBoolean("f3_notif", f3)
                                 .apply();
 
-                        // Công tắc 2: Báo cáo định kỳ 90 phút
                         long now = System.currentTimeMillis();
                         if (f2 && (now - lastIntervalReportTime >= INTERVAL_90_MIN)) {
                             lastIntervalReportTime = now;
                             ApiClient.postEvent("interval_90m", "app_name", currentForegroundApp);
                         }
 
-                        // Công tắc 3: Bắn Notification sang điện thoại
                         if (f3 && pendingNotif != null && !pendingNotif.isEmpty()) {
                             showCustomNotification(pendingNotif);
                         }
@@ -103,7 +99,6 @@ public class MonitorAccessibilityService extends AccessibilityService {
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.getPackageName() != null) {
             String pkg = event.getPackageName().toString();
 
-            // Bỏ qua thanh trạng thái, bàn phím và chính app điều khiển
             if (pkg.contains("systemui") ||
                 pkg.contains("inputmethod") ||
                 pkg.equals("com.a54.sync") ||
@@ -113,7 +108,6 @@ public class MonitorAccessibilityService extends AccessibilityService {
 
             SharedPreferences prefs = getSharedPreferences("A54Prefs", MODE_PRIVATE);
 
-            // Khi thoát ra Màn hình chính (Samsung Launcher / Redmi MIUI Home)
             if (pkg.contains("launcher") || pkg.contains("miui.home")) {
                 currentForegroundApp = "Màn hình chính (" + pkg + ")";
                 if (isScreenUnlocked && prefs.getBoolean("f1_unlock", false) && !lastActiveApp.isEmpty()) {
@@ -123,7 +117,6 @@ public class MonitorAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            // Khi mở hoặc chuyển sang một ứng dụng khác (YouTube, Zalo, Chrome...)
             String appName = getReadableAppName(pkg);
             currentForegroundApp = appName;
 
