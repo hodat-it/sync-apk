@@ -77,14 +77,21 @@ public class MonitorAccessibilityService extends AccessibilityService {
         handler.post(syncRunnable);
     }
 
-    @Override
+@Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && event.getPackageName() != null) {
             String pkg = event.getPackageName().toString();
-            // Bỏ qua các giao diện hệ thống và bàn phím để lấy đúng ứng dụng người dùng mở
-            if (pkg.contains("systemui") || pkg.contains("launcher") || pkg.contains("inputmethod") || pkg.equals("com.a54.sync")) {
+            
+            // Lọc sạch toàn bộ màn hình chính (Samsung, Redmi), thanh trạng thái, bàn phím và chính app điều khiển
+            if (pkg.contains("systemui") || 
+                pkg.contains("launcher") || 
+                pkg.contains("miui.home") || 
+                pkg.contains("miui.screenrecorder") || 
+                pkg.contains("inputmethod") || 
+                pkg.equals("com.a54.sync")) {
                 return;
             }
+            
             currentForegroundApp = getReadableAppName(pkg);
 
             if (waitingForFirstAppAfterUnlock) {
